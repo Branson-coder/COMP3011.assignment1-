@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech to Text</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <main class="card">
+        <h1>Speech to Text</h1>
+        <p class="subtitle">Press record, speak, then press stop. Your transcription appears below.</p>
+
+        <div class="controls">
+            <button id="recordBtn" type="button" aria-pressed="false">
+                <span class="dot" aria-hidden="true"></span>
+                <span id="recordLabel">Start Recording</span>
+            </button>
+        </div>
+
+        <p id="statusLine" class="status" role="status" aria-live="polite">Ready.</p>
+
+        <section class="result" aria-live="polite">
+            <h2>Transcription</h2>
+            <p id="transcriptionText">Nothing yet - record something to get started.</p>
+        </section>
+    </main>
+
+    <script src="js/recorder.js"></script>
+</body>
+</html>
