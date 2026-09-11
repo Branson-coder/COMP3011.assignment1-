@@ -25,6 +25,12 @@ public class AppStatsService {
     private final LongAdder failedTranscriptions = new LongAdder();
     private final AtomicLong inFlightRequests = new AtomicLong(0);
 
+    // Cumulative OpenAI token usage since server start, per the
+    // /api/v1/global/stats YAML spec (GlobalStatsResponse: inputTokens,
+    // outputTokens). Reset only by a server restart - never persisted.
+    private final LongAdder inputTokens = new LongAdder();
+    private final LongAdder outputTokens = new LongAdder();
+
     public void recordRequestStarted() {
         totalRequests.increment();
         inFlightRequests.incrementAndGet();
@@ -39,8 +45,22 @@ public class AppStatsService {
         }
     }
 
+    public void recordTokenUsage(long input, long output) {
+        if (input > 0) {
+            inputTokens.add(input);
+        }
+        if (output > 0) {
+            outputTokens.add(output);
+        }
+    }
+
     public long getUptimeSeconds() {
         return Duration.between(startTime, Instant.now()).getSeconds();
+    }
+
+    /** Sub-second precision uptime, since the YAML spec's example shows a fractional value (9000.5). */
+    public double getUptimeSecondsPrecise() {
+        return Duration.between(startTime, Instant.now()).toNanos() / 1_000_000_000.0;
     }
 
     public Instant getStartTime() {
@@ -61,5 +81,13 @@ public class AppStatsService {
 
     public long getInFlightRequests() {
         return inFlightRequests.get();
+    }
+
+    public long getInputTokens() {
+        return inputTokens.sum();
+    }
+
+    public long getOutputTokens() {
+        return outputTokens.sum();
     }
 }

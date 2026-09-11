@@ -1,32 +1,40 @@
 package com.adelaide.sttapp.controller;
 
+import com.adelaide.sttapp.dto.AdminErrorResponse;
+import com.adelaide.sttapp.dto.GlobalStatsResponse;
+import com.adelaide.sttapp.dto.ShutdownResponse;
+import com.adelaide.sttapp.dto.UptimeResponse;
 import com.adelaide.sttapp.service.AppStatsService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Uptime / runtime stats / graceful shutdown endpoints.
+ * Server administration and global statistics endpoints.
  *
- * IMPORTANT: the assignment's actual YAML API spec for these endpoints was
- * not included in the brief text provided to this assistant (the brief
- * only contains a placeholder line, "Additional endpoints yaml
- * specification here"). The paths, field names and status codes below are
- * a reasonable best guess based on the one path the brief does name
- * explicitly (/api/v1/admin/shutdown, mentioned under Advanced Topics) and
- * standard conventions. Since TITAN grades these endpoints by exact
- * machine testing, get the real YAML from the subject site/Assignment 1
- * launch slides and line these up exactly before relying on TITAN feedback.
+ * Implements the YAML spec ("Speech-to-Text Web Site Administration and
+ * Statistics API", COMP3011 Assignment 1) exactly:
+ *   GET  /api/v1/admin/uptime   -> UptimeResponse
+ *   POST /api/v1/admin/shutdown -> 202 ShutdownResponse, or 409 if already shutting down
+ *   GET  /api/v1/global/stats   -> GlobalStatsResponse (OpenAI token usage, NOT request counts)
+ *
+ * All three response schemas in the YAML have additionalProperties: false,
+ * so every response here contains exactly the fields specified - nothing
+ * extra.
  */
 @RestController
 public class AdminController {
@@ -35,6 +43,7 @@ public class AdminController {
 
     private final AppStatsService stats;
     private final ConfigurableApplicationContext context;
+    private final AtomicBoolean shutdownInProgress = new AtomicBoolean(false);
 
     public AdminController(AppStatsService stats, ConfigurableApplicationContext context) {
         this.stats = stats;
@@ -42,22 +51,18 @@ public class AdminController {
     }
 
     @GetMapping("/api/v1/admin/uptime")
-    public ResponseEntity<Map<String, Object>> uptime() {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("startTime", stats.getStartTime().toString());
-        body.put("uptimeSeconds", stats.getUptimeSeconds());
-        return ResponseEntity.ok(body);
+    public ResponseEntity<UptimeResponse> uptime() {
+        Instant now = Instant.now();
+        double uptimeSeconds = Duration.between(stats.getStartTime(), now).toNanos() / 1_000_000_000.0;
+        return ResponseEntity.ok(new UptimeResponse(
+                stats.getStartTime().toString(),
+                now.toString(),
+                uptimeSeconds));
     }
 
-    @GetMapping("/api/v1/admin/stats")
-    public ResponseEntity<Map<String, Object>> stats() {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("totalRequests", stats.getTotalRequests());
-        body.put("inFlightRequests", stats.getInFlightRequests());
-        body.put("successfulTranscriptions", stats.getSuccessfulTranscriptions());
-        body.put("failedTranscriptions", stats.getFailedTranscriptions());
-        body.put("uptimeSeconds", stats.getUptimeSeconds());
-        return ResponseEntity.ok(body);
+    @GetMapping("/api/v1/global/stats")
+    public ResponseEntity<GlobalStatsResponse> globalStats() {
+        return ResponseEntity.ok(new GlobalStatsResponse(stats.getInputTokens(), stats.getOutputTokens()));
     }
 
     /**
@@ -72,15 +77,46 @@ public class AdminController {
      * distinct from the STT key, and (b) let a cloud orchestrator (Kubernetes,
      * systemd, etc.) manage lifecycle via SIGTERM rather than exposing an
      * HTTP verb for it at all. This assignment exposes it unauthenticated
-     * only because the brief explicitly calls for it.
+     * only because the YAML spec explicitly calls for it.
      */
     @PostMapping("/api/v1/admin/shutdown")
-    public ResponseEntity<Map<String, String>> shutdown() {
+    public ResponseEntity<?> shutdown(HttpServletRequest request) {
+        if (!shutdownInProgress.compareAndSet(false, true)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(errorBody(HttpStatus.CONFLICT,
+                            "Graceful shutdown is already in progress.",
+                            request.getRequestURI()));
+        }
+
         log.info("Graceful shutdown requested via /api/v1/admin/shutdown");
         // Let this response actually reach the client before the JVM exits.
         Executors.newSingleThreadScheduledExecutor().schedule(
                 () -> System.exit(SpringApplication.exit(context, () -> 0)),
                 500, TimeUnit.MILLISECONDS);
-        return ResponseEntity.ok(Map.of("status", "shutting down"));
+
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(new ShutdownResponse("Graceful shutdown requested."));
+    }
+
+    /**
+     * Catches any unexpected failure in this controller's endpoints and
+     * reports it using the YAML spec's exact ErrorResponse shape, so a 500
+     * from here is still machine-testable rather than falling through to
+     * Spring's default Whitelabel error page.
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<AdminErrorResponse> handleUnexpected(Exception ex, HttpServletRequest request) {
+        log.error("Unexpected error in admin endpoint {}: {}", request.getRequestURI(), ex.getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(errorBody(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected server error occurred.", request.getRequestURI()));
+    }
+
+    private AdminErrorResponse errorBody(HttpStatus status, String message, String path) {
+        return new AdminErrorResponse(
+                Instant.now().toString(),
+                status.value(),
+                status.getReasonPhrase(),
+                message,
+                path);
     }
 }

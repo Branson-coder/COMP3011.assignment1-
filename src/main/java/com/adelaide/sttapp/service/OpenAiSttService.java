@@ -32,11 +32,13 @@ public class OpenAiSttService {
 
     private final WebClient webClient;
     private final OpenAiProperties properties;
+    private final AppStatsService stats;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public OpenAiSttService(WebClient openAiWebClient, OpenAiProperties properties) {
+    public OpenAiSttService(WebClient openAiWebClient, OpenAiProperties properties, AppStatsService stats) {
         this.webClient = openAiWebClient;
         this.properties = properties;
+        this.stats = stats;
     }
 
     /**
@@ -92,6 +94,14 @@ public class OpenAiSttService {
     private String extractText(String json) {
         try {
             JsonNode node = objectMapper.readTree(json);
+
+            JsonNode usage = node.get("usage");
+            if (usage != null) {
+                long input = usage.has("input_tokens") ? usage.get("input_tokens").asLong(0) : 0;
+                long output = usage.has("output_tokens") ? usage.get("output_tokens").asLong(0) : 0;
+                stats.recordTokenUsage(input, output);
+            }
+
             JsonNode textNode = node.get("text");
             return textNode != null ? textNode.asText() : "";
         } catch (IOException e) {
