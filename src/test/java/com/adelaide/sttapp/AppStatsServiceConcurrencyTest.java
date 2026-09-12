@@ -25,7 +25,7 @@ class AppStatsServiceConcurrencyTest {
         AppStatsService stats = new AppStatsService();
         int concurrentRequests = 250;
 
-        ExecutorService pool = Executors.newFixedThreadPool(50);
+        ExecutorService pool = Executors.newFixedThreadPool(concurrentRequests);
         CountDownLatch ready = new CountDownLatch(concurrentRequests);
         CountDownLatch go = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(concurrentRequests);

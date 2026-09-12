@@ -5,11 +5,10 @@ import com.adelaide.sttapp.dto.GlobalStatsResponse;
 import com.adelaide.sttapp.dto.ShutdownResponse;
 import com.adelaide.sttapp.dto.UptimeResponse;
 import com.adelaide.sttapp.service.AppStatsService;
+import com.adelaide.sttapp.service.ShutdownService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.SpringApplication;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -19,9 +18,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Server administration and global statistics endpoints.
@@ -35,6 +31,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * All three response schemas in the YAML have additionalProperties: false,
  * so every response here contains exactly the fields specified - nothing
  * extra.
+ *
+ * The actual JVM-terminating shutdown mechanism lives in ShutdownService,
+ * not here - see that class's Javadoc for why (testability: the real
+ * mechanism calls System.exit, which is unsafe to trigger from a test).
  */
 @RestController
 public class AdminController {
@@ -42,12 +42,11 @@ public class AdminController {
     private static final Logger log = LoggerFactory.getLogger(AdminController.class);
 
     private final AppStatsService stats;
-    private final ConfigurableApplicationContext context;
-    private final AtomicBoolean shutdownInProgress = new AtomicBoolean(false);
+    private final ShutdownService shutdownService;
 
-    public AdminController(AppStatsService stats, ConfigurableApplicationContext context) {
+    public AdminController(AppStatsService stats, ShutdownService shutdownService) {
         this.stats = stats;
-        this.context = context;
+        this.shutdownService = shutdownService;
     }
 
     @GetMapping("/api/v1/admin/uptime")
@@ -81,19 +80,13 @@ public class AdminController {
      */
     @PostMapping("/api/v1/admin/shutdown")
     public ResponseEntity<?> shutdown(HttpServletRequest request) {
-        if (!shutdownInProgress.compareAndSet(false, true)) {
+        boolean initiated = shutdownService.tryInitiateShutdown();
+        if (!initiated) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(errorBody(HttpStatus.CONFLICT,
                             "Graceful shutdown is already in progress.",
                             request.getRequestURI()));
         }
-
-        log.info("Graceful shutdown requested via /api/v1/admin/shutdown");
-        // Let this response actually reach the client before the JVM exits.
-        Executors.newSingleThreadScheduledExecutor().schedule(
-                () -> System.exit(SpringApplication.exit(context, () -> 0)),
-                500, TimeUnit.MILLISECONDS);
-
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(new ShutdownResponse("Graceful shutdown requested."));
     }
